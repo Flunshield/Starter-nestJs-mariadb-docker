@@ -6,13 +6,21 @@ Ce document fournit toutes les informations nécessaires pour installer, lancer,
 
 ## Section Lancement
 
-Renommer le fichier ``.env.example`` en ``.env``
+Renommer le fichier ``.env.example`` en ``.env`` et mettre à jour le .env
 
-Pour démarrer l'environnement de développement (assurez-vous que docker soit lancé), exécutez :
-
+Puis lancer la commande : **A lancer depuis la racine du projet**
 ```bash
-docker compose up
+# Commande pour windows
+script/lancement/script.ps1
+
+# Commande pour linux ou Max
+script/lancement/script.sh
 ```
+
+Pour alimenter la bdd, vous pouvez utiliser les requetes SQL se trouvant dans :
+**script/requeteSql/script**
+
+A JOUER DANS PHPMYADMIN
 
 ## Section commandes utiles
 
@@ -27,10 +35,64 @@ npm run lint
 
 - Lancer les Tests Localement :
 
-Pour exécuter les tests unitaires et d'intégration :
+Pour exécuter les tests end 2 end :
 ```bash
-npm run test
+npm run test:e2e
 ```
+
+### Migration
+Créer une migration et mettre à jour la Bdd : **A lancer depuis la racine du projet**
+````bash
+# Commande Windows :
+.\script\migrations\recupMigration.ps1 "nomDeLaMigration"
+# Commande Linux/Max :
+.\script\migrations\recupMigration.sh "nomDeLaMigration"
+````
+
+## Section Prisma
+
+Pas d'injection SQL grâce à prisma. :-)
+
+**Video youtube a regarder**
+```
+https://www.youtube.com/watch?v=akP9E1vURBU&ab_channel=AKDEV
+```
+Installer les dépendances (si pas déja fait) :
+```
+npm install prisma -D
+npm install @prisma/client
+```
+
+Pour créer une migration après avoir modifier le fichier **schema.prisma**
+```
+npx prisma migrate dev --name nomDeVotreMigration
+```
+
+Pour récupérer le dossier migration depuis le container
+```
+docker cp IDdeVotreContainer:/app/prisma/migrations ./prisma
+```
+
+Pour généré les migrations non joué (a utiliser à chaque lancement du projet) :
+```
+npx prisma migrate up
+```
+
+Pour jouer une migration spécifique :
+```
+npx prisma migrate up --nomDeVotreMigration
+```
+
+Pour annuler une migration spécifique :
+```
+npx prisma migrate down --nomDeVotreMigration
+```
+
+Pour lancer prisma studio (Port par défault 5555) :
+```
+npx prisma studio
+```
+
 
 ## Section commit
 
@@ -47,6 +109,7 @@ fix(server): resolve memory leak issue
 
 # Bonnes Pratiques
 
+- Penser à créer un fichier .ts dans le dossier entity lorsque vous créer une nouvelle table dans la base de donnée.
 - Documenter un maximum les fonctions créés comme ceci :
 ```js
 /*
