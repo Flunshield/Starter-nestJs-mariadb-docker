@@ -1,4 +1,4 @@
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import * as cookie from 'cookie';
 import { Response } from 'express';
@@ -9,6 +9,7 @@ import { sign, SignOptions } from 'jsonwebtoken';
 @Injectable()
 export class RefreshTokenService {
   prisma = new PrismaClient();
+
   /**
    * Méthode pour générer et envoyer un token de rafraîchissement à l'utilisateur.
    *
@@ -40,7 +41,7 @@ export class RefreshTokenService {
   public async generateRefreshToken(
     userId: number,
     res: Response,
-  ): Promise<HttpException> {
+  ): Promise<string> {
     try {
       const privateKey = fs.readFileSync('private_key.pem', 'utf-8');
       const payload = { sub: userId };
@@ -52,15 +53,16 @@ export class RefreshTokenService {
       const refreshToken = sign(payload, privateKey, options);
       const cookies = cookie.serialize('frenchcodeareatoken', refreshToken, {
         maxAge: 3600000,
-        httpOnly: true, // Utiliser httpOnly pour des raisons de sécurité
-        sameSite: true, // Nécessite Secure pour les requêtes HTTPS
-        secure: true, // Utiliser uniquement en production avec HTTPS
-        domain: 'localhost', // Remplacez par le domaine correct
+        path: '/', // accessible from the entire domain
+        domain: process.env.DOMAINE, // parent domain
+        secure: true, // cookie accessible via HTTPS only
+        httpOnly: true, // cookie accessible via HTTP only, not JavaScript
+        sameSite: 'none',
       });
 
       res.setHeader('Set-Cookie', cookies);
 
-      return new HttpException('Utilisateur connecté', HttpStatus.OK);
+      return refreshToken;
     } catch {
       throw new Error("Une erreur s'est produite");
     }
@@ -103,7 +105,20 @@ export class RefreshTokenService {
       const { sub: userId } = jwt.verify(refreshToken, publicKey);
       const user = await this.prisma.user.findUnique({
         where: { id: parseInt(userId as string, 10) },
-        include: {
+        select: {
+          id: true,
+          userName: true,
+          password: false,
+          email: true,
+          emailVerified: true,
+          createdAt: true,
+          lastLogin: true,
+          status: true,
+          avatar: true,
+          firstName: true,
+          lastName: true,
+          groupsId: true,
+          languagePreference: true,
           groups: true,
         },
       });
@@ -113,18 +128,7 @@ export class RefreshTokenService {
         const payload = {
           sub: userId,
           aud: {
-            userName: user.userName,
-            email: user.email,
-            emailVerifed: user.emailVerified,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            lastLogin: user.lastLogin,
-            createdAt: user.createdAt,
-            status: user.status,
-            avatar: user.avatar,
-            groups: user.groupsId,
-            languagePreference: user.languagePreference,
-            group: user.groups,
+            data: user,
           },
         };
         const options: SignOptions = {
@@ -133,8 +137,6 @@ export class RefreshTokenService {
           header: { alg: 'RS256', typ: 'access' },
         };
         return sign(payload, privateKey, options);
-      } else {
-        return 'Nok';
       }
     } catch (error) {
       // Gérer l'erreur, par exemple, le refresh token est invalide
@@ -145,8 +147,8 @@ export class RefreshTokenService {
   /**
    * Génère un jeton d'accès pour l'e-mail avec les informations spécifiées.
    *
-   * @param id - L'identifiant numérique associé à l'utilisateur.
-   * @param userName - Le nom d'utilisateur lié à l'utilisateur.
+   * @param data
+   * @param expiresIn
    * @returns Une chaîne représentant le jeton d'accès généré.
    * @throws {Error} Une erreur est levée si la lecture de la clé privée échoue ou si la génération du jeton échoue.
    *
@@ -163,15 +165,44 @@ export class RefreshTokenService {
    * console.log(accessToken);
    * ```
    */
-  async generateAccesTokenEmail(id: number, userName: string): Promise<string> {
+  async generateAccesTokenEmail(
+    data: {
+      id?: number;
+      userName?: string;
+      puzzleID?: string;
+      mailID?: number;
+    },
+    expiresIn?: string,
+  ): Promise<string> {
     const options: SignOptions = {
       algorithm: 'RS256',
-      expiresIn: '5m',
+      expiresIn: expiresIn ? expiresIn : '5m',
       header: { alg: 'RS256', typ: 'access' },
     };
+    const payload = {
+      id: data?.id,
+      userName: data?.userName,
+      puzzleID: data?.puzzleID,
+      mailID: data?.mailID,
+      aud: {
+        data: {
+          groups: {
+            roles: 'Invite',
+          },
+        },
+      },
+    };
     const privateKey = fs.readFileSync('private_key.pem', 'utf-8');
-    return jwt.sign({ id: id, userName: userName }, privateKey, options);
+    return jwt.sign(payload, privateKey, options);
   }
+
+  /**
+   * Génère un token d'accès pour le processus de changement de mot de passe.
+   *
+   * @param {number} id - L'identifiant de l'utilisateur.
+   * @param {string} userName - Le nom d'utilisateur de l'utilisateur.
+   * @returns {Promise<string>} Une promesse qui résout avec le token d'accès généré.
+   */
   async generateAccesTokenPasswordChange(
     id: number,
     userName: string,

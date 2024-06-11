@@ -1,16 +1,13 @@
 import { HttpException, HttpStatus, Injectable, Res } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
-import {
-  DecodedTokenMail,
-  User,
-  UserConnect,
-} from '../../interfaces/userInterface';
+import { DecodedTokenMail, shortUser } from '../../interfaces/userInterface';
 import * as jwt from 'jsonwebtoken';
 import * as fs from 'fs';
 import { PrismaClient } from '@prisma/client';
 import { RefreshTokenService } from './RefreshTokenService';
 import { Response } from 'express';
 import { MailService } from '../../email/service/MailService';
+import { StripeService } from '../stripe/stripe.service';
 
 const prisma = new PrismaClient();
 
@@ -33,6 +30,7 @@ export class AuthService {
   constructor(
     private readonly refreshTokenService: RefreshTokenService,
     private readonly mailService: MailService,
+    private readonly stripeService: StripeService,
   ) {}
 
   /**
@@ -117,10 +115,10 @@ export class AuthService {
    * }
    */
   async connect(
-    credentials: UserConnect,
+    credentials: shortUser,
     @Res() res: Response,
     frenchCodeAreaCookie: string,
-  ): Promise<HttpException | HttpStatus> {
+  ) {
     try {
       // Vérifier si le cookie existe
       const existingToken = frenchCodeAreaCookie;
@@ -132,22 +130,19 @@ export class AuthService {
             id: number;
           };
           if (decodedToken) {
-            throw new HttpException(
-              'Utilisateur déja connecté',
+            new HttpException(
+              'Utilisateur déjà connecté',
               HttpStatus.NOT_FOUND,
             );
           } else {
-            throw new HttpException('Token erroné', HttpStatus.BAD_REQUEST);
+            new HttpException('Token erroné', HttpStatus.BAD_REQUEST);
           }
         } catch (verifyError) {
-          throw new HttpException(
-            'Vérification érroné',
-            HttpStatus.BAD_REQUEST,
-          );
+          new HttpException('Vérification erronée', HttpStatus.BAD_REQUEST);
         }
       }
 
-      const user: User = await prisma.user.findFirst({
+      const user: shortUser = await prisma.user.findFirst({
         where: {
           userName: credentials.userName,
         },
@@ -161,29 +156,34 @@ export class AuthService {
 
         if (passwordsMatch) {
           try {
-            await this.refreshTokenService.generateRefreshToken(user.id, res);
-            return HttpStatus.OK;
+            const tokenGenerated =
+              await this.refreshTokenService.generateRefreshToken(user.id, res);
+            if (tokenGenerated) {
+              return await this.refreshTokenService.generateAccessTokenFromRefreshToken(
+                tokenGenerated,
+              );
+            }
           } catch (readFileError) {
             console.error('Error reading private key file:', readFileError);
-            throw new HttpException(
-              'Erreur sur la lecture de la private key',
+            new HttpException(
+              'Erreur sur la lecture de la clé privée',
               HttpStatus.EXPECTATION_FAILED,
             );
           }
         } else {
-          throw new HttpException(
-            'Le nom de compte et/ou le mot de passe est/sont erroné',
+          new HttpException(
+            'Le nom de compte et/ou le mot de passe est/sont erroné(s)',
             HttpStatus.BAD_REQUEST,
           );
         }
       } else {
-        throw new HttpException(
-          'Le nom de compte et/ou le mot de passe est/sont erroné',
+        new HttpException(
+          'Le nom de compte et/ou le mot de passe est/sont erroné(s)',
           HttpStatus.BAD_REQUEST,
         );
       }
     } catch (error) {
-      return error.status || HttpStatus.INTERNAL_SERVER_ERROR;
+      return HttpStatus.INTERNAL_SERVER_ERROR;
     }
   }
 
@@ -222,7 +222,7 @@ export class AuthService {
           publicKey,
         ) as unknown as DecodedTokenMail;
       if (verifedToken?.exp - verifedToken?.iat > 0) {
-        await prisma.user.update({
+        const updateUser = await prisma.user.update({
           where: {
             id: verifedToken.id,
             userName: verifedToken.userName,
@@ -232,7 +232,11 @@ export class AuthService {
             status: 'actif',
           },
         });
-        return HttpStatus.OK;
+        if (updateUser) {
+          return HttpStatus.OK;
+        } else {
+          return HttpStatus.BAD_REQUEST;
+        }
       }
       return HttpStatus.GATEWAY_TIMEOUT;
     } catch (error) {
@@ -240,18 +244,28 @@ export class AuthService {
     }
   }
 
+  /**
+   * Gère le processus de récupération de mot de passe pour un utilisateur.
+   *
+   * @param {string} email - L'adresse e-mail associée au compte utilisateur.
+   * @returns {Promise<HttpStatus>} Une promesse qui résout avec le statut HTTP indiquant le résultat de l'opération.
+   */
   async passwordForgot(email: string): Promise<HttpStatus> {
+    // Récupérer la liste des utilisateurs depuis la base de données
     const userListe = await prisma.user.findMany();
 
+    // Initialiser les données utilisateur par défaut
     let data = {
       userName: '',
       email: '',
       id: null,
     };
 
+    // Créer un tableau de promesses pour vérifier l'existence de l'utilisateur
     const userExistPromises: Promise<boolean>[] = userListe.map(
       async (user) => {
         if (user.email === email) {
+          // Mettre à jour les données si l'utilisateur est trouvé
           data = {
             id: user.id,
             userName: user.userName,
@@ -262,20 +276,21 @@ export class AuthService {
       },
     );
 
-    // Attendez que toutes les vérifications soient terminées
+    // Attendre que toutes les vérifications soient terminées
     const userExistArray: boolean[] = await Promise.all(userExistPromises);
 
+    // Vérifier si l'utilisateur existe
     if (!userExistArray) {
       return HttpStatus.BAD_REQUEST;
     } else if (userExistArray) {
-      // Realise les actions necessaire à l'envoie du mail d'oublie de mot de passe.
-      console.log('data_authService : ', data);
+      // Réaliser les actions necessaire à l'envoie du mail d'oublie de mot de passe.
       const responseSendMail = await this.mailService.prepareMail(
         data.id,
         data,
         2,
       );
 
+      // Vérifier le résultat de l'envoi du mail
       if (responseSendMail) {
         return HttpStatus.OK;
       } else {
@@ -284,10 +299,18 @@ export class AuthService {
     }
   }
 
-  async changePassword(data: UserConnect): Promise<HttpStatus> {
+  /**
+   * Modifie le mot de passe d'un utilisateur.
+   *
+   * @param {shortUser} data - Les données de l'utilisateur comprenant le nom d'utilisateur et le nouveau mot de passe.
+   * @returns {Promise<HttpStatus>} Une promesse qui résout avec le statut HTTP indiquant le résultat de l'opération.
+   */
+  async changePassword(data: shortUser): Promise<HttpStatus> {
     try {
+      // Récupérer la liste des utilisateurs depuis la base de données
       const userListe = await prisma.user.findMany();
 
+      // Créer un tableau de promesses pour vérifier l'existence de l'utilisateur
       const userExistPromises: Promise<boolean>[] = userListe.map(
         async (user) => {
           return user.userName === data.userName;
@@ -303,7 +326,10 @@ export class AuthService {
       );
 
       if (userExist) {
+        // Hacher le nouveau mot de passe
         const password: string = await AuthService.hashPassword(data.password);
+
+        // Mettre à jour le mot de passe de l'utilisateur dans la base de données
         await prisma.user.update({
           where: {
             userName: data.userName,

@@ -1,17 +1,23 @@
 FROM node:18
 
-WORKDIR /app
+# Set the working directory in the container
+WORKDIR /usr/src/app
 
+# Copy package.json and package-lock.json to the container
 COPY package*.json ./
 
+# Install dependencies
 RUN npm install dotenv
 RUN npm ci
 
+# Copy the rest of the application files
 COPY . .
 
-RUN npm run build
+# Installer les dépendances WebSocket
+RUN npm install @nestjs/websockets
+
+# Build the application#
 RUN npx prisma generate
 
-EXPOSE 3000
-
-CMD [ "npm", "run", "start:dev" ]
+# Command to run your application
+CMD ["npm", "run", "start:dev"]

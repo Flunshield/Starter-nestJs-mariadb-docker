@@ -1,8 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { MailerService } from '@nestjs-modules/mailer';
-import { UserMail } from '../../interfaces/userInterface';
 import { RefreshTokenService } from '../../services/authentificationService/RefreshTokenService';
 
+interface Mail {
+  email?: string;
+  userName?: string;
+  firstName?: string;
+  lastName?: string;
+  commentaire?: string;
+  idPuzzle?: string;
+  pdfBuffer?: Promise<Buffer>;
+}
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
@@ -12,15 +20,15 @@ export class MailService {
     private readonly refreshTokenService: RefreshTokenService,
   ) {}
 
-  async sendActiveAccount(user: UserMail, urlActive: string): Promise<boolean> {
+  async sendActiveAccount(data: Mail, urlActive: string): Promise<boolean> {
     try {
       await this.mailerService.sendMail({
-        to: user.email,
+        to: data.email,
         subject: 'Active ton compte',
         template: 'active',
         context: {
           urlActive: urlActive,
-          userName: user.userName,
+          userName: data.userName,
         },
       });
       return true;
@@ -32,18 +40,37 @@ export class MailService {
     }
   }
 
-  async sendForgotPassword(
-    user: UserMail,
-    urlActive: string,
-  ): Promise<boolean> {
+  async sendForgotPassword(data: Mail, urlActive: string): Promise<boolean> {
     try {
       await this.mailerService.sendMail({
-        to: user.email,
+        to: data.email,
         subject: 'Modifie ton mot de passe',
         template: 'forgot',
         context: {
           urlActive: urlActive,
-          userName: user.userName,
+          userName: data.userName,
+        },
+      });
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `Erreur lors de l'envoi de l'e-mail : ${error.message}`,
+        error.stack,
+      );
+    }
+  }
+
+  async sendPuzzleToUser(data: Mail, urlActive: string): Promise<boolean> {
+    try {
+      await this.mailerService.sendMail({
+        to: data.email,
+        subject: 'Puzzle de test',
+        template: 'puzzleTest',
+        context: {
+          urlActive: urlActive,
+          firstName: data.firstName,
+          lastName: data.lastName,
+          commentaire: data.commentaire,
         },
       });
       return true;
@@ -72,6 +99,7 @@ export class MailService {
    * @param type
    * @param data - Les informations de l'utilisateur, y compris le nom d'utilisateur.
    *
+   * @param mailID
    * @example
    * ```typescript
    * const id = 123;
@@ -79,16 +107,21 @@ export class MailService {
    * await sendMail(id, userData);
    * ```
    **/
-  public async prepareMail(id: number, data: UserMail, type: number) {
-    // TYPE 1 : Envoie du mail pour valdier l'adresse mail
+  public async prepareMail(
+    id?: number,
+    data?: Mail,
+    type?: number,
+    mailID?: number,
+  ) {
+    // TYPE 1 : Envoie du mail pour valider l'adresse mail.
     if (type === 1) {
-      const token = await this.refreshTokenService.generateAccesTokenEmail(
-        id,
-        data.userName,
-      );
+      const token = await this.refreshTokenService.generateAccesTokenEmail({
+        id: id,
+        userName: data.userName,
+      });
       return await this.sendActiveAccount(
         data,
-        `http://localhost:3000/auth/validMail?token=${token}`,
+        `${process.env.URL_BACK}/auth/validMail?token=${token}`,
       );
     }
 
@@ -101,7 +134,54 @@ export class MailService {
         );
       return await this.sendForgotPassword(
         data,
-        `http://localhost:5173/changePassword?token=${token}&userName=${data.userName}`,
+        `${process.env.URL_FRONT}/changePassword?token=${token}&userName=${data.userName}`,
+      );
+    }
+
+    // TYPE 3 : Envoie d'un puzzle par mail
+    if (type === 3) {
+      const token = await this.refreshTokenService.generateAccesTokenEmail(
+        { puzzleID: data.idPuzzle, mailID: mailID },
+        '7d',
+      );
+      return await this.sendPuzzleToUser(
+        data,
+        `${process.env.URL_FRONT}/loadGame?token=${token}`,
+      );
+    }
+
+    // TYPE 4 : Envoie d'un mail de confirmation d'achat avec facture
+    if (type === 4) {
+      return await this.sendConfirmationOrder(data);
+    }
+  }
+
+  async sendConfirmationOrder(data: Mail): Promise<boolean> {
+    try {
+      // Attendre la résolution de la promesse pour obtenir le Buffer
+      const pdfBuffer = await data.pdfBuffer;
+
+      await this.mailerService.sendMail({
+        to: data.email,
+        subject: "Confirmation d'achat",
+        template: 'confirmOrder',
+        context: {
+          firstName: data.firstName,
+          lastName: data.lastName,
+        },
+        attachments: [
+          {
+            filename: 'facture.pdf',
+            content: pdfBuffer,
+            contentType: 'application/pdf',
+          },
+        ],
+      });
+      return true;
+    } catch (error) {
+      this.logger.error(
+        `Erreur lors de l'envoi de l'e-mail : ${error.message}`,
+        error.stack,
       );
     }
   }

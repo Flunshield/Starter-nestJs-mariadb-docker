@@ -1,13 +1,11 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import { AuthService } from '../authentificationService/auth.service';
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { MailService } from '../../email/service/MailService';
 import { User } from '../../interfaces/userInterface';
+import { Dto } from '../../dto/Dto';
+import { MailService } from '../../email/service/MailService';
 
-const prisma = new PrismaClient();
-
-//TODO: Lorsque la page "mon compte" sera créé coté front, il faudra gérer la vérification du mail. OU obliger a valdier le mail avant la première connexion.
+const prisma: PrismaClient = new PrismaClient();
 
 /**
  * Service responsable de la gestion des utilisateurs.
@@ -28,7 +26,8 @@ const prisma = new PrismaClient();
  */
 @Injectable()
 export class UserService {
-  constructor(private readonly MailService: MailService) {}
+  constructor(private readonly mailService: MailService) {}
+
   /**
    * Crée un nouvel utilisateur avec des vérifications d'existence et hachage sécurisé du mot de passe.
    *
@@ -36,54 +35,163 @@ export class UserService {
    * @returns Une promesse résolue avec un boolean indiquant si l'utilisateur a été créé avec succès.
    * @throws {Error} Une erreur si la création de l'utilisateur échoue.
    */
-  public async create(data: User): Promise<boolean> {
+  public async create(data: Dto) {
+    const regexPassword =
+      /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
     try {
-      const userListe = await prisma.user.findMany();
+      if (!regexPassword.test(data.password)) {
+        // Si le mot de passe n'est pas conforme.
+        return { bool: false, type: 'password' };
+      }
 
-      const userExistPromises: Promise<boolean>[] = userListe.map(
-        async (user) => {
-          return user.userName === data.userName || user.email === data.email;
+      const userExist = await prisma.user.findFirst({
+        where: {
+          OR: [{ userName: data.userName }, { email: data.email }],
         },
-      );
-
-      // Attendez que toutes les vérifications soient terminées
-      const userExistArray: boolean[] = await Promise.all(userExistPromises);
-
-      // Vérifiez s'il y a un utilisateur existant
-      const userExist: boolean = userExistArray.some(
-        (exists: boolean) => exists,
-      );
+      });
 
       if (!userExist) {
         const password: string = await AuthService.hashPassword(data.password);
-        const createUser: User = await prisma.user.create({
-          data: {
-            userName: data.userName,
-            password: password,
-            email: data.email,
-            firstName: data.firstName,
-            lastName: data.lastName,
-            groupsId: 1, //Par défaut groupe 1 qui équivaut au groupe utilisateur lambda
-          },
-        });
 
-        // Realise les actions necessaire à l'envoie du mail de création de compte.
-        const responseSendMail = await this.MailService.prepareMail(
-          createUser.id,
-          data,
-          1,
-        );
+        try {
+          const createUser: User = await prisma.user.create({
+            data: {
+              userName: data.userName,
+              password: password,
+              email: data.email,
+              firstName: data.firstName,
+              lastName: data.lastName,
+              groupsId: 1, // Par défaut groupe 1 qui équivaut au groupe utilisation lambda
+            },
+          });
 
-        return createUser && responseSendMail;
+          // Realise les actions necessaire à l'envoie du mail de création de compte.
+          const responseSendMail = await this.mailService.prepareMail(
+            createUser.id,
+            data,
+            1,
+          );
+          return {
+            bool: createUser && responseSendMail,
+            type: 'ok',
+          };
+        } catch (error) {
+          console.error("Erreur lors de la création de l'utilisateur :", error);
+          // Gérer l'erreur de création de l'utilisateur
+        }
       } else {
         //Si l'utilisateur existe déja
-        return false;
+        return { bool: false, type: 'username' };
       }
     } catch (error) {
-      throw new HttpException(
-        'Erreur interne du serveur',
-        HttpStatus.INTERNAL_SERVER_ERROR,
+      throw new HttpException(error, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  /**
+   * Met à jour les informations d'un utilisateur dans la base de données.
+   *
+   * @param user - Les nouvelles informations de l'utilisateur à mettre à jour.
+   *
+   * @returns Le code de statut HTTP indiquant le résultat de l'opération de mise à jour.
+   * - HttpStatus.OK (200) si la mise à jour a réussi.
+   * - HttpStatus.NOT_FOUND (404) si l'utilisateur n'a pas été trouvé dans la base de données.
+   *
+   * @throws Error si une erreur se produit lors de la mise à jour de l'utilisateur.
+   *
+   * @beta
+   */
+  async update(user: User) {
+    /**
+     * Met à jour les informations de l'utilisateur dans la base de données.
+     * Les champs mis à jour incluent l'avatar, la présentation, la localisation, l'entreprise, l'école, GitHub, l'URL, le nom, le prénom et les titres.
+     */
+    const userUpdate = await prisma.user.update({
+      where: {
+        userName: user.userName,
+        id: user.id,
+      },
+      data: {
+        avatar: user.avatar,
+        lastName: user.lastName,
+        firstName: user.firstName,
+      },
+    });
+
+    /**
+     * Vérifie si la mise à jour de l'utilisateur a réussi.
+     * Retourne le code de statut HTTP approprié en conséquence.
+     */
+    return userUpdate ? HttpStatus.OK : HttpStatus.NOT_FOUND;
+  }
+
+  async getUsers(
+    pageNumber: number,
+    itemPerPage: number,
+    isEntreprise: string,
+  ) {
+    const offset = (pageNumber - 1) * itemPerPage;
+    const testEntreprise = isEntreprise === 'true';
+    try {
+      const users = await prisma.user.findMany({
+        take: itemPerPage,
+        skip: offset,
+        select: {
+          id: true,
+          firstName: testEntreprise,
+          lastName: testEntreprise,
+          userName: true,
+          email: testEntreprise,
+        },
+      });
+
+      const countUser = await prisma.user.count();
+
+      return { item: users, total: countUser };
+    } catch (error) {
+      console.error('Erreur lors de la récupération des utilisateurs :', error);
+      throw error;
+    }
+  }
+
+  async getUsersByUserName(
+    userNameSubstring: string,
+    itemPerPage: number,
+    isEntreprise: string,
+  ) {
+    try {
+      const testEntreprise = isEntreprise === 'true';
+      const users = await prisma.user.findMany({
+        take: itemPerPage,
+        where: {
+          userName: {
+            contains: userNameSubstring,
+          },
+        },
+        select: {
+          id: true,
+          firstName: testEntreprise,
+          lastName: testEntreprise,
+          userName: true,
+          email: testEntreprise,
+        },
+      });
+
+      const countUser = await prisma.user.count({
+        where: {
+          userName: {
+            contains: userNameSubstring,
+          },
+        },
+      });
+      return { item: users, total: countUser };
+    } catch (error) {
+      console.error(
+        'Error fetching users with userName containing:',
+        userNameSubstring,
+        error,
       );
+      throw error;
     }
   }
 }

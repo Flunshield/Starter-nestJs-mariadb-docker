@@ -7,26 +7,26 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id                 Int       @id @default(autoincrement())
-  userName           String    @unique
-  password           String
-  email              String
-  emailVerified      Boolean   @default(false)
-  createdAt          DateTime  @default(now())
-  lastLogin          DateTime?
-  status             String    @default("inactive")
-  avatar             String?
+model user {
+  id                 Int                  @id @default(autoincrement())
   firstName          String?
   lastName           String?
-  groupsId           Int       @default(1)
+  userName           String               @unique
+  password           String
+  email              String
+  emailVerified      Boolean              @default(false)
+  createdAt          DateTime             @default(now())
+  lastLogin          DateTime?
   languagePreference String?
-  groups             Groups    @relation(fields: [groupsId], references: [id])
+  status             String               @default("inactive")
+  avatar             String?
+  groupsId           Int                  @default(1)
+  groups             groups               @relation(fields: [groupsId], references: [id])
 }
 
-model Groups {
+model groups {
   id    Int     @id @default(autoincrement())
   name  String
   roles String?
-  users User[]
+  users user[]
 }

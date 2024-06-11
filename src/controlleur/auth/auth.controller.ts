@@ -11,15 +11,11 @@ import {
   SetMetadata,
   UseGuards,
 } from '@nestjs/common';
-import { UserConnect } from '../../interfaces/userInterface';
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+import { shortUser } from '../../interfaces/userInterface';
 import { AuthService } from '../../services/authentificationService/auth.service';
 import { RefreshTokenService } from '../../services/authentificationService/RefreshTokenService';
-import * as cookie from 'cookie';
 import { RolesGuard } from '../../guards/roles.guard';
 import { ADMIN, ENTREPRISE, USER } from '../../constantes/contante';
-
-//TODO: Ajouter une vérification au login pour l'email vérifier, si non, renvoyer un mail de validation
 
 export const Roles = (...roles: string[]) => SetMetadata('roles', roles);
 
@@ -33,11 +29,11 @@ export class AuthController {
   /**
    * Crée une nouvelle instance de AuthController.
    *
-   * @param AuthService
+   * @param authService
    * @param refreshTokenService
    */
   constructor(
-    private readonly AuthService: AuthService,
+    private readonly authService: AuthService,
     private readonly refreshTokenService: RefreshTokenService,
   ) {}
 
@@ -52,26 +48,22 @@ export class AuthController {
    * @throws HttpException - En cas d'erreur lors de la connexion.
    */
   @Post('/login')
-  async login(
-    @Body() userLogin: UserConnect,
-    @Req() request,
-    @Res({ passthrough: true }) response,
-  ) {
+  async login(@Body() userLogin: shortUser, @Req() request, @Res() response) {
     try {
       const frenchCodeAreaCookie = request.cookies['frenchcodeareatoken'];
-      const reponse = await this.AuthService.connect(
+      const reponse = await this.authService.connect(
         userLogin,
         response,
         frenchCodeAreaCookie,
       );
-      if (reponse === HttpStatus.OK) {
-        return response.status(HttpStatus.OK).send('Connecté');
-      } else {
-        throw new HttpException(
-          `Erreur de connexion : ${reponse}`,
-          HttpStatus.FORBIDDEN,
-        );
-      }
+      // Ajout du setTimeout pour les bruteForce sur la connexion.
+      setTimeout(() => {
+        if (reponse !== 500) {
+          return response.status(HttpStatus.OK).send({ message: reponse });
+        } else {
+          return response.status(HttpStatus.NOT_FOUND).send();
+        }
+      }, 1000);
     } catch (error: any) {
       const status = error.status || HttpStatus.INTERNAL_SERVER_ERROR;
       throw new HttpException(error.message, status);
@@ -102,16 +94,25 @@ export class AuthController {
    */
   @Post('refresh-access-token')
   async refreshAccessToken(@Req() request, @Res() response): Promise<void> {
+    let refreshToken = request.cookies['frenchcodeareatoken'];
     try {
-      const refreshToken = request.cookies['frenchcodeareatoken'];
       const accessToken =
         await this.refreshTokenService.generateAccessTokenFromRefreshToken(
           refreshToken,
         );
-      response.send({ accessToken: accessToken });
+      refreshToken = accessToken;
+      if (!accessToken) {
+        response
+          .status(HttpStatus.UNAUTHORIZED)
+          .send({ message: 'Unauthorized' });
+      } else {
+        response.send({ accessToken: accessToken });
+      }
     } catch (error: any) {
-      console.error("Erreur lors de la récupération de l'accesToken :", error);
-      throw new HttpException('Merci de vous authentifier', error.HttpStatus);
+      throw new HttpException(
+        `Merci de vous authentifier ${refreshToken}`,
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -140,17 +141,14 @@ export class AuthController {
     try {
       const refreshToken = request.cookies['frenchcodeareatoken'];
       if (refreshToken) {
-        const nomDuCookie = 'frenchcodeareatoken';
-
         // Suppression du cookie côté serveur
-        response.setHeader(
-          'Set-Cookie',
-          cookie.serialize(nomDuCookie, '', {
-            httpOnly: true,
-            maxAge: 0,
-            domain: 'localhost', // Assurez-vous de spécifier le même chemin que celui utilisé pour définir le cookie
-          }),
-        );
+        response.clearCookie('frenchcodeareatoken', {
+          path: '/', // accessible from the entire domain
+          domain: process.env.DOMAINE, // parent domain
+          secure: true, // cookie accessible via HTTPS only
+          httpOnly: true, // cookie accessible via HTTP only, not JavaScript
+          sameSite: 'none', // 'None' avec une majuscule pour respecter la syntaxe du SameSite
+        });
 
         // Envoyez une réponse pour confirmer la suppression du cookie
         response.send('Cookie supprimé avec succès');
@@ -188,11 +186,11 @@ export class AuthController {
   @Get('/validMail')
   async validMail(@Query('token') token: string, @Res() response) {
     try {
-      const validMail: HttpStatus = await this.AuthService.validMail(token);
+      const validMail: HttpStatus = await this.authService.validMail(token);
       if (validMail === 200) {
-        response.redirect('http://localhost:5173/login');
+        response.redirect(`${process.env.URL_FRONT}/login`);
       } else {
-        response.redirect('http://localhost:5173/notFound');
+        response.redirect(`${process.env.URL_FRONT}/notFound`);
       }
     } catch (error: any) {
       console.error("Erreur lors de la création de l'utilisateur :", error);
@@ -218,8 +216,12 @@ export class AuthController {
         const token = accesToken.split(' ')[1];
 
         try {
-          await this.AuthService.validMail(token);
-          response.send();
+          const validMail = await this.authService.validMail(token);
+          if (validMail) {
+            response.send();
+          } else {
+            response.send();
+          }
         } catch (error) {
           console.log(error);
         }
@@ -234,7 +236,7 @@ export class AuthController {
     try {
       const email = request.body.email;
       try {
-        await this.AuthService.passwordForgot(email);
+        await this.authService.passwordForgot(email);
         response.send();
       } catch (error) {
         console.log(error);
@@ -248,7 +250,7 @@ export class AuthController {
   async changePassword(@Req() request, @Res() response) {
     const data = request.body;
     try {
-      await this.AuthService.changePassword(data);
+      await this.authService.changePassword(data);
       response.send();
     } catch (error: any) {
       console.error("Erreur lors de la création de l'utilisateur :", error);

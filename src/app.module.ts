@@ -5,9 +5,7 @@ import {
   RequestMethod,
 } from '@nestjs/common';
 import { AppController } from './app.controller';
-import { AppService } from './app.service';
 import { UserController } from './controlleur/user/user.controller';
-import { UserService } from './services/user/user.service';
 import { AuthService } from './services/authentificationService/auth.service';
 import { AuthController } from './controlleur/auth/auth.controller';
 import { VerifyJwtMiddleware } from './midleWare/jwt-utils';
@@ -22,6 +20,10 @@ import {
   QueryResolver,
 } from 'nestjs-i18n';
 import * as path from 'path';
+import { StripeController } from './controlleur/stripe/stripe.controller';
+import { StripeService } from './services/stripe/stripe.service';
+import { UserService } from './services/user/user.service';
+import { PdfService } from './services/pdfservice/pdf.service';
 
 @Module({
   imports: [
@@ -39,14 +41,20 @@ import * as path from 'path';
       ],
     }),
   ],
-  controllers: [AppController, UserController, AuthController],
+  controllers: [
+    AppController,
+    UserController,
+    AuthController,
+    StripeController,
+  ],
   providers: [
-    AppService,
     UserService,
     AuthService,
     MailService,
     RefreshTokenService,
     RolesGuard,
+    StripeService,
+    PdfService,
   ],
 })
 export class AppModule implements NestModule {

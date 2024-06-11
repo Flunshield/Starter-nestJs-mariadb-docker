@@ -2,21 +2,20 @@ import { Module } from '@nestjs/common';
 import { MailerModule } from '@nestjs-modules/mailer';
 import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handlebars.adapter';
 
-//TODO: a modifier avec le nouveau nom de domaine
 @Module({
   imports: [
     MailerModule.forRoot({
       transport: {
         host: process.env.MAIL_HOST,
-        port: 465,
-        secure: true,
+        port: 587,
+        secure: false,
         auth: {
           user: process.env.MAIL,
           pass: process.env.MAIL_PASSWORD,
         },
       },
       defaults: {
-        from: '"NotreProjet" <noreply@qrcoffee.fr>',
+        from: '"CodeArena" <contact@jbertrand.fr>',
       },
       template: {
         dir: process.cwd() + '/templates/mails/',
